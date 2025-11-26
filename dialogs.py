@@ -4,8 +4,6 @@ import customtkinter as ctk
 from tkinter import messagebox
 from .models import UnitModel, TenantModel, StaffModel
 
-
-
 class LoginDialog(ctk.CTkToplevel):
     def __init__(self, parent, db: Database):
         super().__init__(parent)
@@ -51,7 +49,6 @@ class LoginDialog(ctk.CTkToplevel):
             self.destroy()
         else:
             messagebox.showerror("Login", "Invalid credentials.", parent=self)
-
 
 class ChangePasswordDialog(ctk.CTkToplevel):
     def __init__(self, parent, db: Database):
@@ -113,7 +110,6 @@ class ChangePasswordDialog(ctk.CTkToplevel):
         self.saved = True
         self.destroy()
 
-
 class PolicyDialog(ctk.CTkToplevel):
     def __init__(self, parent, text=""):
         super().__init__(parent)
@@ -129,8 +125,9 @@ class PolicyDialog(ctk.CTkToplevel):
         hdr = ctk.CTkLabel(frm, text="Apartment Rules & Policy", font=ctk.CTkFont(size=14, weight="bold"))
         hdr.pack(anchor="w", pady=(2, 6))
 
-        body_fr = ctk.CTkFrame(frm, corner_radius=8)
-        body_fr.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        body_fr = ctk.CTkFrame(frm, corner_radius=8, height=120)
+        body_fr.pack(fill="x", padx=6, pady=(0, 6))
+        body_fr.pack_propagate(False)
 
         policy_text = text or (
             "1. Rent is due every month.\n"
@@ -161,7 +158,7 @@ class PolicyDialog(ctk.CTkToplevel):
         btn_fr = ctk.CTkFrame(frm, fg_color="transparent")
         btn_fr.pack(pady=(2, 8))
 
-        self.accept_btn = ctk.CTkButton(btn_fr, text="Accept", width=110, command=self.on_accept, state="disabled")
+        self.accept_btn = ctk.CTkButton(btn_fr, text="Accept", width=110, command=self.on_accept, state="normal")
         self.accept_btn.pack(side="right", padx=6)
 
         ctk.CTkButton(btn_fr, text="Decline", width=110, fg_color="#883333", command=self.on_decline).pack(
@@ -169,7 +166,7 @@ class PolicyDialog(ctk.CTkToplevel):
         )
 
     def on_toggle(self):
-        self.accept_btn.configure(state="normal" if self.accept_var.get() else "disabled")
+        pass
 
     def on_accept(self):
         self.accepted = True
@@ -178,7 +175,6 @@ class PolicyDialog(ctk.CTkToplevel):
     def on_decline(self):
         self.accepted = False
         self.destroy()
-
 
 class TenantDialog(ctk.CTkToplevel):
     def __init__(self, parent, unit_model: UnitModel, tenant_model: TenantModel, tenant=None):
@@ -191,7 +187,7 @@ class TenantDialog(ctk.CTkToplevel):
         self.result = {}
 
         self.title("Tenant")
-        self.geometry("650x520")
+        self.geometry("650x680")
         self.resizable(False, False)
         self.build_ui()
         if self.tenant:
@@ -463,362 +459,3 @@ class TenantDialog(ctk.CTkToplevel):
         self.saved = True
         self.destroy()
 
-
-class MoveOutDialog(ctk.CTkToplevel):
-    def __init__(self, parent, tenant_name):
-        super().__init__(parent)
-        self.saved = False
-        self.reason = ""
-        self.date = datetime.date.today().isoformat()
-
-        self.title("Terminate / Move-out Tenant")
-        self.geometry("480x260")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.grab_set()
-
-        frm = ctk.CTkFrame(self, corner_radius=12)
-        frm.pack(fill="both", expand=True, padx=16, pady=16)
-
-        ctk.CTkLabel(
-            frm,
-            text=f"Move Out: {tenant_name}",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=(4, 10))
-
-        ctk.CTkLabel(frm, text="Select Reason:").pack(anchor="w", padx=10, pady=(4, 2))
-
-        reasons = [
-            "Found cheaper accommodation",
-            "Moving to another city",
-            "Bought own house/condo",
-            "Job relocation",
-            "Family reasons",
-            "Unsatisfied with facilities",
-            "Financial difficulties",
-            "End of contract",
-            "Other (specify below)"
-        ]
-
-        self.reason_var = tk.StringVar(value=reasons[0])
-        self.reason_cmb = ctk.CTkComboBox(frm, values=reasons, variable=self.reason_var, width=420, state="readonly")
-        self.reason_cmb.pack(padx=10, pady=(0, 10))
-
-        ctk.CTkLabel(frm, text="Additional Details (optional):").pack(anchor="w", padx=10, pady=(4, 2))
-        self.details_e = ctk.CTkEntry(frm, width=420, placeholder_text="Enter additional details")
-        self.details_e.pack(padx=10, pady=(0, 10))
-
-        btn_frame = ctk.CTkFrame(frm, fg_color="transparent")
-        btn_frame.pack(pady=6)
-
-        ctk.CTkButton(btn_frame, text="Confirm Move Out", width=150, command=self.on_save).pack(side="left", padx=6)
-        ctk.CTkButton(btn_frame, text="Cancel", width=120, fg_color="#555555", command=self.destroy).pack(
-            side="left", padx=6
-        )
-
-    def on_save(self):
-        selected = self.reason_var.get()
-        details = self.details_e.get().strip()
-
-        if selected == "Other (specify below)" and not details:
-            messagebox.showwarning("Input Required", "Please provide details for 'Other' reason.", parent=self)
-            return
-
-        self.reason = f"{selected} - {details}" if details else selected
-        self.saved = True
-        self.destroy()
-
-
-class PaymentDialog(ctk.CTkToplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.saved = False
-        self.result = {}
-        self.title("New Payment")
-        self.geometry("400x320")
-        self.build_ui()
-        self.transient(parent)
-        self.grab_set()
-
-    def build_ui(self):
-        frm = ctk.CTkFrame(self, corner_radius=12)
-        frm.pack(fill="both", expand=True, padx=16, pady=16)
-
-        ctk.CTkLabel(frm, text="Tenant ID").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        self.tid_e = ctk.CTkEntry(frm, width=160)
-        self.tid_e.grid(row=0, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Rent").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        self.rent_e = ctk.CTkEntry(frm, width=160)
-        self.rent_e.grid(row=1, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Electricity").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        self.elec_e = ctk.CTkEntry(frm, width=160)
-        self.elec_e.grid(row=2, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Water").grid(row=3, column=0, sticky="w", padx=8, pady=4)
-        self.water_e = ctk.CTkEntry(frm, width=160)
-        self.water_e.grid(row=3, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Status").grid(row=4, column=0, sticky="w", padx=8, pady=4)
-        self.status_cmb = ctk.CTkComboBox(frm, values=["Paid", "Overdue", "Refund", "Due"], width=160)
-        self.status_cmb.set("Paid")
-        self.status_cmb.grid(row=4, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Note").grid(row=5, column=0, sticky="w", padx=8, pady=4)
-        self.note_e = ctk.CTkEntry(frm, width=200)
-        self.note_e.grid(row=5, column=1, padx=8, pady=4)
-
-        btn_frame = ctk.CTkFrame(frm, fg_color="transparent")
-        btn_frame.grid(row=6, column=0, columnspan=2, pady=12)
-
-        ctk.CTkButton(btn_frame, text="Save", width=120, command=self.on_save).pack(side="left", padx=6)
-        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="#555555", command=self.destroy).pack(
-            side="left", padx=4
-        )
-
-    def on_save(self):
-        try:
-            tenant_id = int(self.tid_e.get().strip())
-        except ValueError:
-            messagebox.showwarning("Input", "Tenant ID must be numeric.", parent=self)
-            return
-
-        try:
-            rent = float(self.rent_e.get().strip() or 0)
-            elec = float(self.elec_e.get().strip() or 0)
-            water = float(self.water_e.get().strip() or 0)
-        except ValueError:
-            messagebox.showwarning("Input", "Amounts must be numeric.", parent=self)
-            return
-
-        status = self.status_cmb.get()
-        note = self.note_e.get().strip()
-
-        self.result = {
-            "tenant_id": tenant_id,
-            "rent": rent,
-            "electricity": elec,
-            "water": water,
-            "status": status,
-            "note": note
-        }
-        self.saved = True
-        self.destroy()
-
-
-class PaymentEditDialog(ctk.CTkToplevel):
-    def __init__(self, parent, payment_row):
-        super().__init__(parent)
-        self.saved = False
-        self.result = {}
-        self.payment_row = payment_row
-
-        self.title(f"Edit Payment #{payment_row['payment_id']}")
-        self.geometry("400x320")
-        self.build_ui()
-        self.transient(parent)
-        self.grab_set()
-
-    def build_ui(self):
-        frm = ctk.CTkFrame(self, corner_radius=12)
-        frm.pack(fill="both", expand=True, padx=16, pady=16)
-
-        tenant_label = f"[{self.payment_row['tenant_id']}] {self.payment_row['name'] or 'Unknown'}"
-        ctk.CTkLabel(frm, text="Tenant").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        ctk.CTkLabel(frm, text=tenant_label).grid(row=0, column=1, sticky="w", padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Rent").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        self.rent_e = ctk.CTkEntry(frm, width=160)
-        self.rent_e.insert(0, str(self.payment_row["rent"] or 0))
-        self.rent_e.grid(row=1, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Electricity").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        self.elec_e = ctk.CTkEntry(frm, width=160)
-        self.elec_e.insert(0, str(self.payment_row["electricity"] or 0))
-        self.elec_e.grid(row=2, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Water").grid(row=3, column=0, sticky="w", padx=8, pady=4)
-        self.water_e = ctk.CTkEntry(frm, width=160)
-        self.water_e.insert(0, str(self.payment_row["water"] or 0))
-        self.water_e.grid(row=3, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Status").grid(row=4, column=0, sticky="w", padx=8, pady=4)
-        self.status_cmb = ctk.CTkComboBox(frm, values=["Paid", "Overdue", "Refund", "Due"], width=160)
-        current_status = self.payment_row["status"] or "Paid"
-        self.status_cmb.set(current_status)
-        self.status_cmb.grid(row=4, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Note").grid(row=5, column=0, sticky="w", padx=8, pady=4)
-        self.note_e = ctk.CTkEntry(frm, width=220)
-        if self.payment_row["note"]:
-            self.note_e.insert(0, self.payment_row["note"])
-        self.note_e.grid(row=5, column=1, padx=8, pady=4)
-
-        btn_frame = ctk.CTkFrame(frm, fg_color="transparent")
-        btn_frame.grid(row=6, column=0, columnspan=2, pady=12)
-
-        ctk.CTkButton(btn_frame, text="Save", width=120, command=self.on_save).pack(side="left", padx=6)
-        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="#555555", command=self.destroy).pack(
-            side="left", padx=4
-        )
-
-    def on_save(self):
-        try:
-            rent = float(self.rent_e.get().strip() or 0)
-            elec = float(self.elec_e.get().strip() or 0)
-            water = float(self.water_e.get().strip() or 0)
-        except ValueError:
-            messagebox.showwarning("Input", "Amounts must be numeric.", parent=self)
-            return
-
-        status = self.status_cmb.get()
-        note = self.note_e.get().strip()
-
-        self.result = {
-            "rent": rent,
-            "electricity": elec,
-            "water": water,
-            "status": status,
-            "note": note
-        }
-        self.saved = True
-        self.destroy()
-
-
-class MaintenanceDialog(ctk.CTkToplevel):
-    def __init__(self, parent, staff_model: StaffModel):
-        super().__init__(parent)
-        self.staff_model = staff_model
-        self.saved = False
-        self.result = {}
-
-        self.title("Maintenance Request")
-        self.geometry("460x320")
-        self.build_ui()
-        self.transient(parent)
-        self.grab_set()
-
-    def build_ui(self):
-        frm = ctk.CTkFrame(self, corner_radius=12)
-        frm.pack(fill="both", expand=True, padx=16, pady=16)
-
-        ctk.CTkLabel(frm, text="Tenant ID (optional)").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        self.tid_e = ctk.CTkEntry(frm, width=160)
-        self.tid_e.grid(row=0, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Description").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        self.desc_e = ctk.CTkEntry(frm, width=260)
-        self.desc_e.grid(row=1, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Priority").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        self.prio_cmb = ctk.CTkComboBox(frm, values=["Low", "Medium", "High"], width=120)
-        self.prio_cmb.set("Low")
-        self.prio_cmb.grid(row=2, column=1, padx=8, pady=4, sticky="w")
-
-        ctk.CTkLabel(frm, text="Fee").grid(row=3, column=0, sticky="w", padx=8, pady=4)
-        self.fee_e = ctk.CTkEntry(frm, width=120)
-        self.fee_e.insert(0, "0")
-        self.fee_e.grid(row=3, column=1, padx=8, pady=4, sticky="w")
-
-        ctk.CTkLabel(frm, text="Assigned Staff").grid(row=4, column=0, sticky="w", padx=8, pady=4)
-        staff_names = self.staff_model.active_names() or [""]
-        self.staff_cmb = ctk.CTkComboBox(frm, values=staff_names, width=200)
-        self.staff_cmb.set(staff_names[0] if staff_names else "")
-        self.staff_cmb.grid(row=4, column=1, padx=8, pady=4, sticky="w")
-
-        btn_frame = ctk.CTkFrame(frm, fg_color="transparent")
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=12)
-
-        ctk.CTkButton(btn_frame, text="Submit", width=120, command=self.on_save).pack(side="left", padx=6)
-        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="#555555", command=self.destroy).pack(
-            side="left", padx=4
-        )
-
-    def on_save(self):
-        tid_str = self.tid_e.get().strip()
-        tenant_id = None
-        if tid_str:
-            if not tid_str.isdigit():
-                messagebox.showwarning("Input", "Tenant ID must be numeric.", parent=self)
-                return
-            tenant_id = int(tid_str)
-
-        desc = self.desc_e.get().strip()
-        if not desc:
-            messagebox.showwarning("Input", "Description is required.", parent=self)
-            return
-
-        try:
-            fee = float(self.fee_e.get().strip() or 0)
-        except ValueError:
-            messagebox.showwarning("Input", "Fee must be numeric.", parent=self)
-            return
-
-        prio = self.prio_cmb.get()
-        staff = self.staff_cmb.get().strip()
-
-        self.result = {
-            "tenant_id": tenant_id,
-            "description": desc,
-            "priority": prio,
-            "fee": fee,
-            "staff": staff
-        }
-        self.saved = True
-        self.destroy()
-
-
-class StaffDialog(ctk.CTkToplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.saved = False
-        self.result = {}
-
-        self.title("Staff")
-        self.geometry("380x220")
-        self.build_ui()
-        self.transient(parent)
-        self.grab_set()
-
-    def build_ui(self):
-        frm = ctk.CTkFrame(self, corner_radius=12)
-        frm.pack(fill="both", expand=True, padx=16, pady=16)
-
-        ctk.CTkLabel(frm, text="Name").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        self.name_e = ctk.CTkEntry(frm, width=220)
-        self.name_e.grid(row=0, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Contact").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        self.contact_e = ctk.CTkEntry(frm, width=220)
-        self.contact_e.grid(row=1, column=1, padx=8, pady=4)
-
-        ctk.CTkLabel(frm, text="Role").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        self.role_e = ctk.CTkEntry(frm, width=220)
-        self.role_e.grid(row=2, column=1, padx=8, pady=4)
-
-        btn_frame = ctk.CTkFrame(frm, fg_color="transparent")
-        btn_frame.grid(row=3, column=0, columnspan=2, pady=12)
-
-        ctk.CTkButton(btn_frame, text="Save", width=120, command=self.on_save).pack(side="left", padx=6)
-        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="#555555", command=self.destroy).pack(
-            side="left", padx=4
-        )
-
-    def on_save(self):
-        name = self.name_e.get().strip()
-        if not name:
-            messagebox.showwarning("Input", "Name is required.", parent=self)
-            return
-
-        contact = self.contact_e.get().strip()
-        role = self.role_e.get().strip()
-
-        self.result = {
-            "name": name,
-            "contact": contact,
-            "role": role,
-            "status": "Active"
-        }
-        self.saved = True
-        self.destroy()
