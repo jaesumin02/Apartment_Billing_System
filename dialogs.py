@@ -1206,3 +1206,272 @@ class PaymentEditDialog(ctk.CTkToplevel):
         self.saved = True
         self.destroy()
 
+class ReceiptDialog(ctk.CTkToplevel):
+    def __init__(self, parent, payment_row):
+        super().__init__(parent)
+        self.payment_row = payment_row
+        self.title(f"Receipt - Payment #{payment_row['payment_id']}")
+        self.geometry("420x360")
+        self.resizable(False, False)
+        self.build_ui()
+        self.transient(parent)
+        self.grab_set()
+
+    def build_ui(self):
+        frm = ctk.CTkFrame(self, corner_radius=12)
+        frm.pack(fill="both", expand=True, padx=16, pady=16)
+
+        title_lbl = ctk.CTkLabel(frm, text="PAYMENT RECEIPT", font=ctk.CTkFont(size=16, weight="bold"))
+        title_lbl.pack(pady=(4, 8))
+
+        # Create receipt content as formatted string
+        receipt_text = "=" * 40 + "\n"
+        receipt_text += "PAYMENT RECEIPT".center(40) + "\n"
+        receipt_text += "=" * 40 + "\n\n"
+        receipt_text += f"Receipt No.: {self.payment_row['payment_id']}\n"
+        receipt_text += f"Tenant ID: {self.payment_row['tenant_id']}\n"
+        
+        name = self.payment_row.get("name") or ""
+        if name:
+            receipt_text += f"Tenant Name: {name}\n"
+        
+        receipt_text += f"Date Paid: {self.payment_row.get('date_paid') or 'N/A'}\n"
+        status = (self.payment_row.get('status') or 'Due').upper()
+        receipt_text += f"Status: {status}\n\n"
+        receipt_text += "-" * 40 + "\n"
+        receipt_text += "CHARGES:\n"
+        receipt_text += "-" * 40 + "\n"
+        receipt_text += f"Rent:           ₱{(self.payment_row['rent'] or 0.0):>10.2f}\n"
+        receipt_text += f"Electricity:    ₱{(self.payment_row['electricity'] or 0.0):>10.2f}\n"
+        receipt_text += f"Water:          ₱{(self.payment_row['water'] or 0.0):>10.2f}\n"
+        receipt_text += "-" * 40 + "\n"
+        receipt_text += f"TOTAL:          ₱{(self.payment_row['total'] or 0.0):>10.2f}\n"
+        receipt_text += "-" * 40 + "\n"
+        
+        note = self.payment_row.get("note") or ""
+        if note:
+            receipt_text += f"\nNote: {note}\n"
+        
+        receipt_text += "\nThank you!\n"
+
+        text_frame = tk.Frame(frm, bg="white", relief="solid", bd=1)
+        text_frame.pack(fill="both", expand=True, pady=(4, 8), padx=2)
+        
+        # Use a Label inside the frame
+        receipt_label = tk.Label(
+            text_frame,
+            text=receipt_text,
+            bg="white",
+            fg="black",
+            font=("Courier New", 9),
+            justify="left",
+            wraplength=350,
+            padx=10,
+            pady=10
+        )
+        receipt_label.pack(fill="both", expand=True)
+        
+        self.text_box = receipt_label
+
+        btn_fr = ctk.CTkFrame(frm, fg_color="transparent")
+        btn_fr.pack(pady=(6, 2))
+
+        ctk.CTkButton(btn_fr, text="Save as PDF", width=120, command=self.save_pdf).pack(side="left", padx=6)
+        ctk.CTkButton(btn_fr, text="Print", width=100, command=self.print_receipt).pack(side="left", padx=6)
+        ctk.CTkButton(btn_fr, text="Close", width=100, fg_color="#555555", command=self.destroy).pack(side="left", padx=6)
+
+    def print_receipt(self):
+        if pdf_canvas is None:
+            messagebox.showwarning(
+                "PDF Library Missing",
+                "reportlab is required to print receipts. Install it with 'pip install reportlab'.",
+                parent=self,
+            )
+            return
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        tmp.close()
+        path = tmp.name
+        c = pdf_canvas.Canvas(path, pagesize=A4)
+        width, height = A4
+        y = height - 50
+        lines = self.text_box.cget("text").splitlines()
+        for line in lines:
+            c.drawString(40, y, line)
+            y -= 18
+            if y < 40:
+                c.showPage()
+                y = height - 50
+        c.showPage()
+        c.save()
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(path, "print")
+                messagebox.showinfo("Print", "Receipt sent to the default printer.", parent=self)
+            else:
+                messagebox.showinfo("Print", f"Receipt saved to {path}. Please open and print it manually.", parent=self)
+        except Exception:
+            messagebox.showinfo("Print", f"Receipt saved to {path}. Please open and print it manually.", parent=self)
+
+    def save_pdf(self):
+        if pdf_canvas is None:
+            messagebox.showwarning("PDF Library Missing", "reportlab is required to generate PDF receipts. Install it with 'pip install reportlab'.", parent=self)
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF Files", "*.pdf")],
+            title="Save receipt PDF"
+        )
+        if not path:
+            return
+
+        c = pdf_canvas.Canvas(path, pagesize=A4)
+        width, height = A4
+        y = height - 50
+        lines = self.text_box.cget("text").splitlines()
+        for line in lines:
+            c.drawString(40, y, line)
+            y -= 18
+            if y < 40:
+                c.showPage()
+                y = height - 50
+        c.showPage()
+        c.save()
+        messagebox.showinfo("Saved", f"Receipt saved to {path}", parent=self)
+
+class MaintenanceDialog(ctk.CTkToplevel):
+    def __init__(self, parent, staff_model: StaffModel):
+        super().__init__(parent)
+        self.staff_model = staff_model
+        self.saved = False
+        self.result = {}
+
+        self.title("Maintenance Request")
+        self.geometry("460x320")
+        self.build_ui()
+        self.transient(parent)
+        self.grab_set()
+
+    def build_ui(self):
+        frm = ctk.CTkFrame(self, corner_radius=12)
+        frm.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(frm, text="Tenant ID (optional)").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        self.tid_e = ctk.CTkEntry(frm, width=160)
+        self.tid_e.grid(row=0, column=1, padx=8, pady=4)
+
+        ctk.CTkLabel(frm, text="Description").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        self.desc_e = ctk.CTkEntry(frm, width=260)
+        self.desc_e.grid(row=1, column=1, padx=8, pady=4)
+
+        ctk.CTkLabel(frm, text="Priority").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        self.prio_cmb = ctk.CTkComboBox(frm, values=["Low", "Medium", "High"], width=120)
+        self.prio_cmb.set("Low")
+        self.prio_cmb.grid(row=2, column=1, padx=8, pady=4, sticky="w")
+
+        ctk.CTkLabel(frm, text="Fee").grid(row=3, column=0, sticky="w", padx=8, pady=4)
+        self.fee_e = ctk.CTkEntry(frm, width=120)
+        self.fee_e.insert(0, "0")
+        self.fee_e.grid(row=3, column=1, padx=8, pady=4, sticky="w")
+
+        ctk.CTkLabel(frm, text="Assigned Staff").grid(row=4, column=0, sticky="w", padx=8, pady=4)
+        staff_names = self.staff_model.active_names() or [""]
+        self.staff_cmb = ctk.CTkComboBox(frm, values=staff_names, width=200)
+        self.staff_cmb.set(staff_names[0] if staff_names else "")
+        self.staff_cmb.grid(row=4, column=1, padx=8, pady=4, sticky="w")
+
+        btn_frame = ctk.CTkFrame(frm, fg_color="transparent")
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=12)
+
+        ctk.CTkButton(btn_frame, text="Submit", width=120, command=self.on_save).pack(side="left", padx=6)
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="#555555", command=self.destroy).pack(
+            side="left", padx=4
+        )
+
+    def on_save(self):
+        tid_str = self.tid_e.get().strip()
+        tenant_id = None
+        if tid_str:
+            if not tid_str.isdigit():
+                messagebox.showwarning("Input", "Tenant ID must be numeric.", parent=self)
+                return
+            tenant_id = int(tid_str)
+
+        desc = self.desc_e.get().strip()
+        if not desc:
+            messagebox.showwarning("Input", "Description is required.", parent=self)
+            return
+
+        try:
+            fee = float(self.fee_e.get().strip() or 0)
+        except ValueError:
+            messagebox.showwarning("Input", "Fee must be numeric.", parent=self)
+            return
+
+        prio = self.prio_cmb.get()
+        staff = self.staff_cmb.get().strip()
+
+        self.result = {
+            "tenant_id": tenant_id,
+            "description": desc,
+            "priority": prio,
+            "fee": fee,
+            "staff": staff
+        }
+        self.saved = True
+        self.destroy()
+
+class StaffDialog(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.saved = False
+        self.result = {}
+
+        self.title("Staff")
+        self.geometry("380x220")
+        self.build_ui()
+        self.transient(parent)
+        self.grab_set()
+
+    def build_ui(self):
+        frm = ctk.CTkFrame(self, corner_radius=12)
+        frm.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(frm, text="Name").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        self.name_e = ctk.CTkEntry(frm, width=220)
+        self.name_e.grid(row=0, column=1, padx=8, pady=4)
+
+        ctk.CTkLabel(frm, text="Contact").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        self.contact_e = ctk.CTkEntry(frm, width=220)
+        self.contact_e.grid(row=1, column=1, padx=8, pady=4)
+
+        ctk.CTkLabel(frm, text="Role").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        self.role_e = ctk.CTkEntry(frm, width=220)
+        self.role_e.grid(row=2, column=1, padx=8, pady=4)
+
+        btn_frame = ctk.CTkFrame(frm, fg_color="transparent")
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=12)
+
+        ctk.CTkButton(btn_frame, text="Save", width=120, command=self.on_save).pack(side="left", padx=6)
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="#555555", command=self.destroy).pack(
+            side="left", padx=4
+        )
+
+    def on_save(self):
+        name = self.name_e.get().strip()
+        if not name:
+            messagebox.showwarning("Input", "Name is required.", parent=self)
+            return
+
+        contact = self.contact_e.get().strip()
+        role = self.role_e.get().strip()
+
+        self.result = {
+            "name": name,
+            "contact": contact,
+            "role": role,
+            "status": "Active"
+        }
+        self.saved = True
+        self.destroy()
