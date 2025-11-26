@@ -118,6 +118,15 @@ class Database:
         );
         """)
 
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS activity_log (
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            action TEXT,
+            details TEXT
+        );
+        """)
+
         self.conn.commit()
 
         ensure_column(self.conn, "units", "capacity", "INTEGER DEFAULT 1")
