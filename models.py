@@ -2,8 +2,6 @@ import datetime
 from typing import Optional
 from .database import Database
 
-
-
 class UnitModel:
     def __init__(self, db: Database):
         self.db = db
@@ -37,7 +35,6 @@ class UnitModel:
 
     def update_capacity(self, unit_id, capacity):
         self.db.execute("UPDATE units SET capacity=? WHERE unit_id=?", (capacity, unit_id))
-
 
 class TenantModel:
     def __init__(self, db: Database):
@@ -126,7 +123,6 @@ class TenantModel:
         ORDER BY t.tenant_id
         """, (like, like, like, like))
 
-
 class PaymentModel:
     def __init__(self, db: Database):
         self.db = db
@@ -134,10 +130,11 @@ class PaymentModel:
     def create(self, tenant_id, rent, electricity, water, status="Paid", note=""):
         total = (rent or 0) + (electricity or 0) + (water or 0)
         date_paid = datetime.date.today().isoformat() if status == "Paid" else None
-        self.db.execute("""
+        cur = self.db.execute("""
         INSERT INTO payments (tenant_id, rent, electricity, water, total, date_paid, status, note)
         VALUES (?,?,?,?,?,?,?,?)
         """, (tenant_id, rent, electricity, water, total, date_paid, status, note))
+        return cur.lastrowid
 
     def create_due(self, tenant_id, rent, electricity, water, note=""):
         total = (rent or 0) + (electricity or 0) + (water or 0)
@@ -194,7 +191,6 @@ class PaymentModel:
         """, (start.isoformat(), end.isoformat()))[0]
         return row["s"] or 0.0
 
-
 class MaintenanceModel:
     def __init__(self, db: Database):
         self.db = db
@@ -232,7 +228,6 @@ class MaintenanceModel:
         """, (start.isoformat(), end.isoformat()))[0]
         return row["s"] or 0.0
 
-
 class StaffModel:
     def __init__(self, db: Database):
         self.db = db
@@ -254,3 +249,33 @@ class StaffModel:
 
     def delete(self, staff_id):
         self.db.execute("DELETE FROM staff WHERE staff_id=?", (staff_id,))
+
+    def archive(self, staff_id):
+        """Soft-delete: mark staff as Archived."""
+        self.db.execute("UPDATE staff SET status='Archived' WHERE staff_id=?", (staff_id,))
+
+    def restore(self, staff_id):
+        """Restore archived staff to Active."""
+        self.db.execute("UPDATE staff SET status='Active' WHERE staff_id=?", (staff_id,))
+
+    def archived(self):
+        """Return archived staff rows."""
+        return self.db.query("SELECT * FROM staff WHERE status='Archived' ORDER BY name")
+
+class ActivityLogModel:
+    def __init__(self, db: Database):
+        self.db = db
+
+    def log(self, action, details=""):
+        ts = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+        self.db.execute(
+            "INSERT INTO activity_log (timestamp, action, details) VALUES (?,?,?)",
+            (ts, action, details),
+        )
+
+    def all(self):
+        return self.db.query("SELECT * FROM activity_log ORDER BY log_id DESC")
+
+    def clear(self):
+        self.db.execute("DELETE FROM activity_log", ())
+
