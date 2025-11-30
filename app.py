@@ -1,24 +1,45 @@
-from .database import Database
-from .main_ui import MainApp
-from .dialogs import LoginDialog, PolicyDialog
+import customtkinter as ctk
+from database import Database
+from dialogs import LoginDialog, PolicyDialog
+from ui.main_app import MainApp
+from constants import DEFAULT_APPEARANCE, DEFAULT_COLOR_THEME
 
-def run_app():
+ctk.set_appearance_mode(DEFAULT_APPEARANCE)
+ctk.set_default_color_theme(DEFAULT_COLOR_THEME)
+
+def main():
     db = Database()
-    app = MainApp(db)
+    root = ctk.CTk()
+    root.withdraw()
 
-    pol = PolicyDialog(app)
-    app.wait_window(pol)
-    if not pol.accepted:
-        print('Policy not accepted. Exiting.')
-        return
+    policy = PolicyDialog(root)
+    root.wait_window(policy)
 
-    login = LoginDialog(app, db)
-    app.wait_window(login)
+    login = LoginDialog(root, db)
+    root.wait_window(login)
     if not getattr(login, 'success', False):
-        print('Login failed or cancelled. Exiting.')
+        root.destroy()
+        db.close()
         return
 
-    app.mainloop()
+    root.destroy()
+
+    while True:
+        app = MainApp(db)
+        app.mainloop()
+        if not getattr(app, 'logout_requested', False):
+            break
+        new_root = ctk.CTk()
+        new_root.withdraw()
+        login = LoginDialog(new_root, db)
+        new_root.wait_window(login)
+        if not getattr(login, 'success', False):
+            new_root.destroy()
+            break
+        new_root.destroy()
+
+    db.close()
+
 
 if __name__ == '__main__':
-    run_app()
+    main()
