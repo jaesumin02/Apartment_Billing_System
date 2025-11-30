@@ -1,25 +1,18 @@
 import os
 import sqlite3
 import datetime
-import tempfile
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
+from abc import ABC, abstractmethod
 
 try:
     from openpyxl import Workbook
 except ImportError:
     Workbook = None
 
-try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas as pdf_canvas
-except ImportError:
-    pdf_canvas = None
-
 DB_FILE = "apartment_pro.db"
 DORM_DEFAULT_CAPACITY = 6
-NOTICE_PERIOD_DAYS = 30
 
 SOLO_ELEC = 1500.0
 SOLO_WATER = 150.0
@@ -31,13 +24,20 @@ DORM_WATER = 80.0
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-def ensure_column(conn, table, column, col_def):
-    cur = conn.cursor()
-    cur.execute(f"PRAGMA table_info({table})")
-    cols = [r[1] for r in cur.fetchall()]
-    if column not in cols:
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
-        conn.commit()
+class BaseModel(ABC):
+    def __init__(self, db: "Database"):
+        self._db = db
+
+    def query(self, sql, params=()):
+        return self._db.query(sql, params)
+
+    def execute(self, sql, params=()):
+        return self._db.execute(sql, params)
+
+class Reportable(ABC):
+    @abstractmethod
+    def total_for_month(self, year, month):
+        raise NotImplementedError()
 
 class Database:
     def __init__(self, db_file=DB_FILE):
@@ -46,6 +46,14 @@ class Database:
         self.conn = sqlite3.connect(db_file, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.setup(first_time)
+
+    def _ensure_column(self, table, column, col_def):
+        cur = self.conn.cursor()
+        cur.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if column not in cols:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+            self.conn.commit()
 
     def setup(self, first_time=False):
         c = self.conn.cursor()
@@ -115,6 +123,7 @@ class Database:
             status TEXT,
             fee REAL DEFAULT 0,
             staff TEXT,
+            date_completed DATE,
             FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id)
         );
         """)
@@ -140,18 +149,19 @@ class Database:
 
         self.conn.commit()
 
-        ensure_column(self.conn, "units", "capacity", "INTEGER DEFAULT 1")
-        ensure_column(self.conn, "tenants", "guardian_name", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "guardian_contact", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "guardian_relation", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "emergency_contact", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "advance_paid", "REAL DEFAULT 0")
-        ensure_column(self.conn, "tenants", "deposit_paid", "REAL DEFAULT 0")
-        ensure_column(self.conn, "tenants", "move_out_reason", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "payments", "note", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "maintenance", "fee", "REAL DEFAULT 0")
-        ensure_column(self.conn, "maintenance", "staff", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "staff", "status", "TEXT DEFAULT 'Active'")
+        self._ensure_column("units", "capacity", "INTEGER DEFAULT 1")
+        self._ensure_column("tenants", "guardian_name", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "guardian_contact", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "guardian_relation", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "emergency_contact", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "advance_paid", "REAL DEFAULT 0")
+        self._ensure_column("tenants", "deposit_paid", "REAL DEFAULT 0")
+        self._ensure_column("tenants", "move_out_reason", "TEXT DEFAULT ''")
+        self._ensure_column("payments", "note", "TEXT DEFAULT ''")
+        self._ensure_column("maintenance", "fee", "REAL DEFAULT 0")
+        self._ensure_column("maintenance", "staff", "TEXT DEFAULT ''")
+        self._ensure_column("maintenance", "date_completed", "DATE DEFAULT NULL")
+        self._ensure_column("staff", "status", "TEXT DEFAULT 'Active'")
 
         self.seed_defaults()
 
@@ -202,47 +212,37 @@ class Database:
     def close(self):
         self.conn.close()
 
-
-class UnitModel:
+class UnitModel(BaseModel):
     def __init__(self, db: Database):
-        self.db = db
+        super().__init__(db)
 
     def all(self):
-        return self.db.query("SELECT * FROM units ORDER BY unit_type, unit_code")
+        return self.query("SELECT * FROM units ORDER BY unit_type, unit_code")
 
     def filter_by_status(self, status=None):
         if status == "Vacant":
-            return self.db.query("SELECT * FROM units WHERE status='Vacant' ORDER BY unit_type, unit_code")
+            return self.query("SELECT * FROM units WHERE status='Vacant' ORDER BY unit_type, unit_code")
         elif status == "Occupied":
-            return self.db.query("SELECT * FROM units WHERE status='Occupied' ORDER BY unit_type, unit_code")
+            return self.query("SELECT * FROM units WHERE status='Occupied' ORDER BY unit_type, unit_code")
         else:
             return self.all()
 
-    def by_type(self, unit_type):
-        return self.db.query("SELECT * FROM units WHERE unit_type=? ORDER BY unit_code", (unit_type,))
-
-    def available_by_type(self, unit_type):
-        return self.db.query(
-            "SELECT * FROM units WHERE unit_type=? AND status='Vacant' ORDER BY unit_code",
-            (unit_type,)
-        )
-
     def get(self, unit_id):
-        rows = self.db.query("SELECT * FROM units WHERE unit_id=?", (unit_id,))
+        rows = self.query("SELECT * FROM units WHERE unit_id=?", (unit_id,))
         return rows[0] if rows else None
 
     def update_status(self, unit_id, status):
-        self.db.execute("UPDATE units SET status=? WHERE unit_id=?", (status, unit_id))
+        self.execute("UPDATE units SET status=? WHERE unit_id=?", (status, unit_id))
 
     def update_capacity(self, unit_id, capacity):
-        self.db.execute("UPDATE units SET capacity=? WHERE unit_id=?", (capacity, unit_id))
+        self.execute("UPDATE units SET capacity=? WHERE unit_id=?", (capacity, unit_id))
 
-class TenantModel:
+class TenantModel(BaseModel):
     def __init__(self, db: Database):
-        self.db = db
+        super().__init__(db)
 
     def all(self):
-        return self.db.query("""
+        return self.query("""
         SELECT t.*, u.unit_code, u.unit_type, u.price AS room_price
         FROM tenants t
         LEFT JOIN units u ON t.unit_id = u.unit_id
@@ -250,7 +250,7 @@ class TenantModel:
         """)
 
     def active(self):
-        return self.db.query("""
+        return self.query("""
         SELECT t.*, u.unit_code, u.unit_type, u.price AS room_price
         FROM tenants t
         LEFT JOIN units u ON t.unit_id = u.unit_id
@@ -259,7 +259,7 @@ class TenantModel:
         """)
 
     def terminated(self):
-        return self.db.query("""
+        return self.query("""
         SELECT t.*, u.unit_code, u.unit_type, u.price AS room_price
         FROM tenants t
         LEFT JOIN units u ON t.unit_id = u.unit_id
@@ -268,14 +268,14 @@ class TenantModel:
         """)
 
     def tenants_in_unit(self, unit_id):
-        return self.db.query("""
+        return self.query("""
         SELECT * FROM tenants
         WHERE unit_id=? AND status='Active'
         ORDER BY name
         """, (unit_id,))
 
     def get(self, tenant_id):
-        rows = self.db.query("""
+        rows = self.query("""
         SELECT t.*, u.unit_code, u.unit_type, u.price AS room_price
         FROM tenants t
         LEFT JOIN units u ON t.unit_id = u.unit_id
@@ -293,14 +293,14 @@ class TenantModel:
         cols = ",".join(fields)
         placeholders = ",".join(["?"] * len(fields))
         values = [data.get(f) for f in fields]
-        self.db.execute(f"INSERT INTO tenants ({cols}) VALUES ({placeholders})", values)
+        self.execute(f"INSERT INTO tenants ({cols}) VALUES ({placeholders})", values)
 
     def update(self, tenant_id, **data):
         if not data:
             return
         fields = ", ".join([f"{k}=?" for k in data.keys()])
         values = list(data.values()) + [tenant_id]
-        self.db.execute(f"UPDATE tenants SET {fields} WHERE tenant_id=?", values)
+        self.execute(f"UPDATE tenants SET {fields} WHERE tenant_id=?", values)
 
     def terminate(self, tenant_id, move_out_date, reason):
         self.update(tenant_id, status="Terminated", move_out=move_out_date, move_out_reason=reason)
@@ -310,7 +310,7 @@ class TenantModel:
 
     def search_active(self, query):
         like = f"%{query}%"
-        return self.db.query("""
+        return self.query("""
         SELECT t.*, u.unit_code, u.unit_type, u.price AS room_price
         FROM tenants t
         LEFT JOIN units u ON t.unit_id = u.unit_id
@@ -324,14 +324,14 @@ class TenantModel:
         ORDER BY t.tenant_id
         """, (like, like, like, like))
 
-class PaymentModel:
+class PaymentModel(BaseModel, Reportable):
     def __init__(self, db: Database):
-        self.db = db
+        super().__init__(db)
 
     def create(self, tenant_id, rent, electricity, water, status="Paid", note=""):
         total = (rent or 0) + (electricity or 0) + (water or 0)
         date_paid = datetime.date.today().isoformat() if status == "Paid" else None
-        cur = self.db.execute("""
+        cur = self.execute("""
         INSERT INTO payments (tenant_id, rent, electricity, water, total, date_paid, status, note)
         VALUES (?,?,?,?,?,?,?,?)
         """, (tenant_id, rent, electricity, water, total, date_paid, status, note))
@@ -339,7 +339,7 @@ class PaymentModel:
 
     def create_due(self, tenant_id, rent, electricity, water, note=""):
         total = (rent or 0) + (electricity or 0) + (water or 0)
-        self.db.execute("""
+        self.execute("""
         INSERT INTO payments (tenant_id, rent, electricity, water, total, date_paid, status, note)
         VALUES (?,?,?,?,?,?,?,?)
         """, (tenant_id, rent, electricity, water, total, None, "Due", note))
@@ -347,14 +347,14 @@ class PaymentModel:
     def invoice_exists_with_note(self, tenant_id, note):
         if not note:
             return False
-        row = self.db.query("""
+        row = self.query("""
         SELECT COUNT(*) as c FROM payments
         WHERE tenant_id=? AND note=?
         """, (tenant_id, note))[0]
         return (row["c"] or 0) > 0
 
     def all(self):
-        return self.db.query("""
+        return self.query("""
         SELECT p.*, t.name, t.tenant_type
         FROM payments p
         LEFT JOIN tenants t ON p.tenant_id = t.tenant_id
@@ -362,7 +362,7 @@ class PaymentModel:
         """)
 
     def get(self, payment_id):
-        rows = self.db.query("""
+        rows = self.query("""
         SELECT p.*, t.name, t.tenant_type
         FROM payments p
         LEFT JOIN tenants t ON p.tenant_id = t.tenant_id
@@ -373,7 +373,7 @@ class PaymentModel:
     def update(self, payment_id, rent, electricity, water, status, note):
         total = (rent or 0) + (electricity or 0) + (water or 0)
         date_paid = datetime.date.today().isoformat() if status == "Paid" else None
-        self.db.execute("""
+        self.execute("""
         UPDATE payments
         SET rent=?, electricity=?, water=?, total=?, date_paid=?, status=?, note=?
         WHERE payment_id=?
@@ -385,26 +385,26 @@ class PaymentModel:
             end = datetime.date(year + 1, 1, 1)
         else:
             end = datetime.date(year, month + 1, 1)
-        row = self.db.query("""
+        row = self.query("""
         SELECT SUM(total) AS s
         FROM payments
         WHERE date_paid >= ? AND date_paid < ?
         """, (start.isoformat(), end.isoformat()))[0]
         return row["s"] or 0.0
 
-class MaintenanceModel:
+class MaintenanceModel(BaseModel, Reportable):
     def __init__(self, db: Database):
-        self.db = db
+        super().__init__(db)
 
     def create(self, tenant_id, description, priority, fee=0.0, staff=""):
         date_req = datetime.date.today().isoformat()
-        self.db.execute("""
+        self.execute("""
         INSERT INTO maintenance (tenant_id, description, priority, date_requested, status, fee, staff)
         VALUES (?,?,?,?,?,?,?)
         """, (tenant_id, description, priority, date_req, "Pending", fee, staff))
 
     def all(self):
-        return self.db.query("""
+        return self.query("""
         SELECT m.*, t.name AS tenant_name
         FROM maintenance m
         LEFT JOIN tenants t ON m.tenant_id = t.tenant_id
@@ -412,73 +412,82 @@ class MaintenanceModel:
         """)
 
     def counts(self):
-        total = self.db.query("SELECT COUNT(*) as c FROM maintenance")[0]["c"]
-        pending = self.db.query("SELECT COUNT(*) as c FROM maintenance WHERE status='Pending'")[0]["c"]
+        total = self.query("SELECT COUNT(*) as c FROM maintenance")[0]["c"]
+        pending = self.query("SELECT COUNT(*) as c FROM maintenance WHERE status='Pending'")[0]["c"]
         return total, pending
 
-    def total_fee_for_month(self, year, month):
+    def total_for_month(self, year, month):
         start = datetime.date(year, month, 1)
         if month == 12:
             end = datetime.date(year + 1, 1, 1)
         else:
             end = datetime.date(year, month + 1, 1)
-        row = self.db.query("""
+        row = self.query("""
         SELECT SUM(fee) AS s
         FROM maintenance
         WHERE date_requested >= ? AND date_requested < ?
         """, (start.isoformat(), end.isoformat()))[0]
         return row["s"] or 0.0
 
-class StaffModel:
+    def get(self, request_id):
+        rows = self.query("""
+        SELECT m.*, t.name AS tenant_name
+        FROM maintenance m
+        LEFT JOIN tenants t ON m.tenant_id = t.tenant_id
+        WHERE m.request_id=?
+        """, (request_id,))
+        return rows[0] if rows else None
+
+    def update_status(self, request_id, status):
+        self.execute("UPDATE maintenance SET status=? WHERE request_id=?", (status, request_id))
+
+class StaffModel(BaseModel):
     def __init__(self, db: Database):
-        self.db = db
+        super().__init__(db)
 
     def all(self):
-        return self.db.query("SELECT * FROM staff ORDER BY name")
+        return self.query("SELECT * FROM staff ORDER BY name")
 
     def active(self):
-        return self.db.query("SELECT * FROM staff WHERE status='Active' ORDER BY name")
+        return self.query("SELECT * FROM staff WHERE status='Active' ORDER BY name")
 
     def active_names(self):
         return [r["name"] for r in self.active()]
 
     def create(self, name, contact, role, status="Active"):
-        self.db.execute("""
+        self.execute("""
         INSERT INTO staff (name, contact, role, status)
         VALUES (?,?,?,?)
         """, (name, contact, role, status))
 
     def delete(self, staff_id):
-        self.db.execute("DELETE FROM staff WHERE staff_id=?", (staff_id,))
+        self.execute("DELETE FROM staff WHERE staff_id=?", (staff_id,))
 
     def archive(self, staff_id):
-        """Soft-delete: mark staff as Archived."""
-        self.db.execute("UPDATE staff SET status='Archived' WHERE staff_id=?", (staff_id,))
+        self.execute("UPDATE staff SET status='Archived' WHERE staff_id=?", (staff_id,))
 
     def restore(self, staff_id):
-        """Restore archived staff to Active."""
-        self.db.execute("UPDATE staff SET status='Active' WHERE staff_id=?", (staff_id,))
+        self.execute("UPDATE staff SET status='Active' WHERE staff_id=?", (staff_id,))
 
     def archived(self):
-        """Return archived staff rows."""
-        return self.db.query("SELECT * FROM staff WHERE status='Archived' ORDER BY name")
+        return self.query("SELECT * FROM staff WHERE status='Archived' ORDER BY name")
 
-class ActivityLogModel:
+class ActivityLogModel(BaseModel):
     def __init__(self, db: Database):
-        self.db = db
+        super().__init__(db)
 
     def log(self, action, details=""):
         ts = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-        self.db.execute(
+        self.execute(
             "INSERT INTO activity_log (timestamp, action, details) VALUES (?,?,?)",
             (ts, action, details),
         )
 
     def all(self):
-        return self.db.query("SELECT * FROM activity_log ORDER BY log_id DESC")
+        return self.query("SELECT * FROM activity_log ORDER BY log_id DESC")
 
     def clear(self):
-        self.db.execute("DELETE FROM activity_log", ())
+        self.execute("DELETE FROM activity_log", ())
 
 class LoginDialog(ctk.CTkToplevel):
     def __init__(self, parent, db: Database):
@@ -609,8 +618,7 @@ class PolicyDialog(ctk.CTkToplevel):
             "1. Rent is due every month.\n"
             "2. Utilities must be paid on time.\n"
             "3. No illegal activities inside the premises.\n"
-            "4. Respect dormmates and neighbors.\n"
-            "5. Damage to property may incur maintenance fees."
+            "4. Damage to property may incur maintenance fees."
         )
         for line in [ln.strip() for ln in policy_text.splitlines() if ln.strip()]:
             ctk.CTkLabel(
@@ -826,6 +834,14 @@ class TenantDialog(ctk.CTkToplevel):
         unit_label = self.unit_cmb.get()
         unit = self.unit_map.get(unit_label)
         ttype = self.type_cmb.get().strip().lower()
+
+        if unit:
+            auto_amount = 1334.0  # Standard advance/deposit amount
+            self.advance_e.delete(0, tk.END)
+            self.advance_e.insert(0, f"{auto_amount:.2f}")
+            self.deposit_e.delete(0, tk.END)
+            self.deposit_e.insert(0, f"{auto_amount:.2f}")
+        
         if unit and unit["unit_type"].lower() == "dorm" and ttype == "dorm":
             tenants = self.tenant_model.tenants_in_unit(unit["unit_id"])
             names = []
@@ -847,8 +863,9 @@ class TenantDialog(ctk.CTkToplevel):
                 self.adv_hint.configure(text=txt)
                 self.dep_hint.configure(text=txt)
         else:
-            self.adv_hint.configure(text="")
-            self.dep_hint.configure(text="")
+            txt = "Auto-filled with standard amount: ₱1334.00"
+            self.adv_hint.configure(text=txt)
+            self.dep_hint.configure(text=txt)
 
     def on_save(self):
         name = self.name_e.get().strip()
@@ -1230,7 +1247,10 @@ class PaymentEditDialog(ctk.CTkToplevel):
 class ReceiptDialog(ctk.CTkToplevel):
     def __init__(self, parent, payment_row):
         super().__init__(parent)
-        self.payment_row = payment_row
+        try:
+            self.payment_row = dict(payment_row)
+        except Exception:
+            self.payment_row = payment_row
         self.title(f"Receipt - Payment #{payment_row['payment_id']}")
         self.geometry("420x360")
         self.resizable(False, False)
@@ -1293,70 +1313,7 @@ class ReceiptDialog(ctk.CTkToplevel):
 
         btn_fr = ctk.CTkFrame(frm, fg_color="transparent")
         btn_fr.pack(pady=(6, 2))
-
-        ctk.CTkButton(btn_fr, text="Save as PDF", width=120, command=self.save_pdf).pack(side="left", padx=6)
-        ctk.CTkButton(btn_fr, text="Print", width=100, command=self.print_receipt).pack(side="left", padx=6)
         ctk.CTkButton(btn_fr, text="Close", width=100, fg_color="#555555", command=self.destroy).pack(side="left", padx=6)
-
-    def print_receipt(self):
-        if pdf_canvas is None:
-            messagebox.showwarning(
-                "PDF Library Missing",
-                "reportlab is required to print receipts. Install it with 'pip install reportlab'.",
-                parent=self,
-            )
-            return
-        import tempfile
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        tmp.close()
-        path = tmp.name
-        c = pdf_canvas.Canvas(path, pagesize=A4)
-        width, height = A4
-        y = height - 50
-        lines = self.text_box.cget("text").splitlines()
-        for line in lines:
-            c.drawString(40, y, line)
-            y -= 18
-            if y < 40:
-                c.showPage()
-                y = height - 50
-        c.showPage()
-        c.save()
-        try:
-            if hasattr(os, "startfile"):
-                os.startfile(path, "print")
-                messagebox.showinfo("Print", "Receipt sent to the default printer.", parent=self)
-            else:
-                messagebox.showinfo("Print", f"Receipt saved to {path}. Please open and print it manually.", parent=self)
-        except Exception:
-            messagebox.showinfo("Print", f"Receipt saved to {path}. Please open and print it manually.", parent=self)
-
-    def save_pdf(self):
-        if pdf_canvas is None:
-            messagebox.showwarning("PDF Library Missing", "reportlab is required to generate PDF receipts. Install it with 'pip install reportlab'.", parent=self)
-            return
-
-        path = filedialog.asksaveasfilename(
-            defaultextension=".pdf",
-            filetypes=[("PDF Files", "*.pdf")],
-            title="Save receipt PDF"
-        )
-        if not path:
-            return
-
-        c = pdf_canvas.Canvas(path, pagesize=A4)
-        width, height = A4
-        y = height - 50
-        lines = self.text_box.cget("text").splitlines()
-        for line in lines:
-            c.drawString(40, y, line)
-            y -= 18
-            if y < 40:
-                c.showPage()
-                y = height - 50
-        c.showPage()
-        c.save()
-        messagebox.showinfo("Saved", f"Receipt saved to {path}", parent=self)
 
 class MaintenanceDialog(ctk.CTkToplevel):
     def __init__(self, parent, staff_model: StaffModel):
@@ -1510,7 +1467,7 @@ class MainApp(ctk.CTk):
         self.title("Apartment Billing System")
         self.geometry("1280x720")
         self.minsize(1100, 640)
-        self.state('zoomed')  # Keep window maximized
+        self.state('zoomed') 
 
         self.build_layout()
         self.show_dashboard()
@@ -1582,16 +1539,13 @@ class MainApp(ctk.CTk):
         self.btn_reports = ctk.CTkButton(self.sidebar, text="Reports", command=self.show_reports, **btn_cfg)
         self.btn_reports.grid(row=9, column=0, padx=12, pady=3)
 
-        self.btn_policy = ctk.CTkButton(self.sidebar, text="Policy", command=self.show_policy, **btn_cfg)
-        self.btn_policy.grid(row=10, column=0, padx=12, pady=3)
+        # Policy shown once at startup; sidebar shortcut removed per cleanup request
 
         self.btn_theme = ctk.CTkButton(self.sidebar, text="Toggle Theme", command=self.toggle_theme, **btn_cfg)
         self.btn_theme.grid(row=11, column=0, padx=12, pady=3)
 
         self.btn_change_pw = ctk.CTkButton(self.sidebar, text="Change Password", command=self.change_password, **btn_cfg)
         self.btn_change_pw.grid(row=12, column=0, padx=12, pady=3)
-
-        
 
         self.btn_logout = ctk.CTkButton(self.sidebar, text="Logout", command=self.logout, **btn_cfg)
         self.btn_logout.grid(row=14, column=0, padx=12, pady=8)
@@ -1617,12 +1571,7 @@ class MainApp(ctk.CTk):
         self.refresh_btn = ctk.CTkButton(self.content, text="Refresh", width=110, command=self.refresh_current_view)
         self.refresh_btn.grid(row=0, column=1, sticky="e", padx=12, pady=(10, 0))
 
-        # Sidebar toggle button (show/hide)
-        self.toggle_sidebar_btn = ctk.CTkButton(self.content, text="Hide Sidebar", width=120, command=self.toggle_sidebar)
-        self.toggle_sidebar_btn.grid(row=0, column=2, sticky="e", padx=(0,12), pady=(10,0))
-
         self.body_frame = ctk.CTkFrame(self.content)
-        # occupy the entire content area so tables can extend across the gray background
         self.body_frame.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=0, pady=0)
 
     def clear_body(self, title):
@@ -1654,13 +1603,20 @@ class MainApp(ctk.CTk):
         elif self.current_view == "reports":
             self.show_reports()
     def toggle_sidebar(self):
-        """Show/hide the sidebar."""
         if self.sidebar.winfo_viewable():
             self.sidebar.grid_remove()
-            self.toggle_sidebar_btn.configure(text="Show Sidebar")
+            if hasattr(self, "toggle_sidebar_btn"):
+                try:
+                    self.toggle_sidebar_btn.configure(text="Show Sidebar")
+                except Exception:
+                    pass
         else:
             self.sidebar.grid()
-            self.toggle_sidebar_btn.configure(text="Hide Sidebar")
+            if hasattr(self, "toggle_sidebar_btn"):
+                try:
+                    self.toggle_sidebar_btn.configure(text="Hide Sidebar")
+                except Exception:
+                    pass
 
     def toggle_theme(self):
         # Simple dark/light toggle for wow effect
@@ -1679,7 +1635,6 @@ class MainApp(ctk.CTk):
         self.current_view = "dashboard"
         self.clear_body("Overview")
         frame = self.body_frame
-        # Top: four summary cards
         for i in range(4):
             frame.grid_columnconfigure(i, weight=1)
 
@@ -1699,8 +1654,9 @@ class MainApp(ctk.CTk):
         sub_font = ctk.CTkFont(size=10)
 
         def make_card(col, title_text, value_text, accent="#2f6fff", subtitle="", on_click=None):
-            card = ctk.CTkFrame(frame, corner_radius=12, border_width=2, border_color=accent, fg_color="#051327")
+            card = ctk.CTkFrame(frame, corner_radius=12, border_width=2, border_color=accent, fg_color="#051327", height=120)
             card.grid(row=0, column=col, padx=10, pady=10, sticky="nsew")
+            card.grid_propagate(False)
             top_lbl = ctk.CTkLabel(card, text=title_text.upper(), font=title_font, text_color="#9fc5ff")
             top_lbl.pack(anchor="w", padx=14, pady=(12, 2))
             val_lbl = ctk.CTkLabel(card, text=value_text, font=value_font)
@@ -1708,87 +1664,28 @@ class MainApp(ctk.CTk):
             if subtitle:
                 sub_lbl = ctk.CTkLabel(card, text=subtitle, font=sub_font, text_color="#9fb7d6")
                 sub_lbl.pack(anchor="w", padx=14, pady=(0, 10))
-            # make the card clickable if callback provided
             if callable(on_click):
-                try:
-                    # store original colors to restore later
-                    orig_bg = card.cget('fg_color') if hasattr(card, 'cget') else "#051327"
-                    pressed_bg = "#03202b"
-
-                    def on_enter(e):
-                        try:
-                            card.configure(cursor="hand2")
-                        except Exception:
-                            pass
-
-                    def on_leave(e):
-                        try:
-                            card.configure(cursor="")
-                            card.configure(fg_color=orig_bg)
-                        except Exception:
-                            pass
-
-                    def on_press(e):
-                        try:
-                            card._pressed = True
-                            card.configure(fg_color=pressed_bg)
-                        except Exception:
-                            pass
-
-                    def on_release(e, fn=on_click):
-                        try:
-                            was_pressed = getattr(card, '_pressed', False)
-                            card._pressed = False
-                            card.configure(fg_color=orig_bg)
-                            if was_pressed:
-                                fn()
-                        except Exception:
-                            pass
-
-                    # bind events to card and inner labels
-                    card.bind("<Enter>", on_enter)
-                    card.bind("<Leave>", on_leave)
-                    card.bind("<ButtonPress-1>", on_press)
-                    card.bind("<ButtonRelease-1>", on_release)
-
-                    top_lbl.bind("<Enter>", on_enter)
-                    top_lbl.bind("<Leave>", on_leave)
-                    top_lbl.bind("<ButtonPress-1>", on_press)
-                    top_lbl.bind("<ButtonRelease-1>", on_release)
-
-                    val_lbl.bind("<Enter>", on_enter)
-                    val_lbl.bind("<Leave>", on_leave)
-                    val_lbl.bind("<ButtonPress-1>", on_press)
-                    val_lbl.bind("<ButtonRelease-1>", on_release)
-
-                    if subtitle:
-                        sub_lbl.bind("<Enter>", on_enter)
-                        sub_lbl.bind("<Leave>", on_leave)
-                        sub_lbl.bind("<ButtonPress-1>", on_press)
-                        sub_lbl.bind("<ButtonRelease-1>", on_release)
-                except Exception:
-                    pass
+                card.bind("<Button-1>", lambda e: on_click())
+                top_lbl.bind("<Button-1>", lambda e: on_click())
+                val_lbl.bind("<Button-1>", lambda e: on_click())
+                if subtitle:
+                    sub_lbl.bind("<Button-1>", lambda e: on_click())
             return card
-
-        # four cards across (clickable)
         make_card(0, "TOTAL TENANTS", str(active_tenants), accent="#2f6fff", subtitle="+ demo data", on_click=lambda: self.show_tenants())
         make_card(1, "VACANT UNITS", str(vacants), accent="#2fe6c1", subtitle=f"out of {total_units} units", on_click=lambda: self.show_units())
         make_card(2, "BILLING SUMMARY", f"₱{income_30:,.2f}", accent="#3ad65a", subtitle="Collected this month", on_click=lambda: self.show_billing())
         make_card(3, "MAINTENANCE COUNT", str(pending_req), accent="#ff9a33", subtitle="Pending requests", on_click=lambda: self.show_maintenance())
 
-        # Bottom: two panels (Recent Payments | Pending Maintenance)
         bottom_frame = ctk.CTkFrame(frame, fg_color="transparent")
         bottom_frame.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=6, pady=(8, 0))
         bottom_frame.grid_columnconfigure(0, weight=3)
         bottom_frame.grid_columnconfigure(1, weight=2)
 
-        # Left: Recent Payments card
         pay_card = ctk.CTkFrame(bottom_frame, corner_radius=8, border_width=1, border_color="#2f6fff", fg_color="#061428")
         pay_card.grid(row=0, column=0, sticky="nsew", padx=(6, 4), pady=6)
         ctk.CTkLabel(pay_card, text="Recent Payments", font=ctk.CTkFont(size=14, weight="bold"), text_color="#9fc5ff").pack(anchor="w", padx=12, pady=(12, 6))
 
         cols_pay = ("tenant", "unit", "amount", "date", "status")
-        # remove old if exists
         if hasattr(self, 'dashboard_pay_tree'):
             try:
                 for r in self.dashboard_pay_tree.get_children():
@@ -1801,10 +1698,8 @@ class MainApp(ctk.CTk):
             self.dashboard_pay_tree.column(c, width=110, anchor="w")
         self.dashboard_pay_tree.pack(fill="both", expand=True, padx=8, pady=(0,8))
 
-        # populate all payments
         def row_get(r, k, default=''):
             try:
-                # try mapping access (sqlite3.Row supports indexing by key)
                 return r[k] if (r is not None and k in getattr(r, 'keys', lambda: [])()) else default
             except Exception:
                 try:
@@ -1829,7 +1724,6 @@ class MainApp(ctk.CTk):
             status = row_get(p, 'status', '')
             self.dashboard_pay_tree.insert('', tk.END, values=(tname, unit_code, amount, date_paid, status))
 
-        # Right: Pending Maintenance card
         maint_card = ctk.CTkFrame(bottom_frame, corner_radius=8, border_width=1, border_color="#2f6fff", fg_color="#061428")
         maint_card.grid(row=0, column=1, sticky="nsew", padx=(4, 6), pady=6)
         ctk.CTkLabel(maint_card, text="Pending Maintenance", font=ctk.CTkFont(size=14, weight="bold"), text_color="#9fc5ff").pack(anchor="w", padx=12, pady=(12, 6))
@@ -1847,10 +1741,8 @@ class MainApp(ctk.CTk):
             self.dashboard_maint_tree.column(c, width=140, anchor="w")
         self.dashboard_maint_tree.pack(fill="both", expand=True, padx=8, pady=(0,8))
 
-        # populate maintenance
         maints = self.maintenance_model.all()
         for m in maints[-10:]:
-            # fetch unit code from tenant's unit
             tenant_id = row_get(m, 'tenant_id', '')
             unit_code = ''
             if tenant_id:
@@ -1904,8 +1796,6 @@ class MainApp(ctk.CTk):
         actions = ctk.CTkFrame(filter_box, fg_color="transparent")
         actions.grid(row=0, column=1, rowspan=2, sticky="e", padx=12, pady=6)
         ctk.CTkButton(actions, text="Export Excel", width=120, command=self.export_units_excel).pack(side="top", pady=4)
-        ctk.CTkButton(actions, text="Add Unit", width=120, command=self.add_unit).pack(side="top", pady=4)
-        ctk.CTkButton(actions, text="Edit Unit", width=120, command=self.edit_unit).pack(side="top", pady=4)
         ctk.CTkButton(actions, text="Set Dorm Capacity", width=140, command=self.set_dorm_capacity).pack(side="top", pady=4)
         table_box = ctk.CTkFrame(frame, corner_radius=8, border_width=1, border_color="#2f6fff", fg_color="#061428")
         table_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=0)
@@ -1953,7 +1843,6 @@ class MainApp(ctk.CTk):
 
         rows = self.unit_model.filter_by_status(status if status in ("Vacant", "Occupied") else None)
         for u in rows:
-            # Apply search filter
             if search:
                 unit_code = (u["unit_code"] or "").lower()
                 unit_type = (u["unit_type"] or "").lower()
@@ -1962,7 +1851,6 @@ class MainApp(ctk.CTk):
             
             tenant_list = ""
             if u["unit_type"].lower() == "dorm":
-                # list tenants in dorm
                 tenants = self.tenant_model.tenants_in_unit(u["unit_id"])
                 if tenants:
                     tenant_list = ", ".join(f"[{t['tenant_id']}] {t['name']}" for t in tenants)
@@ -1994,64 +1882,6 @@ class MainApp(ctk.CTk):
             return int(vals[0])
         except (TypeError, ValueError):
             return None
-
-    def add_unit(self):
-        dlg = UnitEditDialog(self, None)
-        self.wait_window(dlg)
-        if not dlg.saved:
-            return
-        data = dlg.result
-        status = 'Vacant'
-        try:
-            self.db.execute("INSERT INTO units (unit_code, unit_type, price, status, capacity) VALUES (?,?,?,?,?)",
-                            (data['unit_code'], data['unit_type'], data['price'], status, data['capacity']))
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add unit: {e}", parent=self)
-            return
-        self.load_units()
-        messagebox.showinfo("Saved", "Unit added.", parent=self)
-
-    def edit_unit(self):
-        uid = self.get_selected_unit_id()
-        if not uid:
-            messagebox.showwarning("Select", "Please select a unit to edit.", parent=self)
-            return
-        unit = self.unit_model.get(uid)
-        if not unit:
-            messagebox.showwarning("Not Found", "Unit not found.", parent=self)
-            return
-        dlg = UnitEditDialog(self, unit)
-        self.wait_window(dlg)
-        if not dlg.saved:
-            return
-        data = dlg.result
-        tenants = self.tenant_model.tenants_in_unit(uid)
-        current = len(tenants)
-        new_cap = data.get('capacity') or 0
-        if new_cap < current:
-            if not messagebox.askyesno("Capacity Reduction", f"New capacity ({new_cap}) is less than current occupants ({current}).\nDo you want to proceed?", parent=self):
-                return
-        try:
-            self.db.execute("UPDATE units SET unit_type=?, price=?, capacity=? WHERE unit_id=?",
-                            (data['unit_type'], data['price'], data['capacity'], uid))
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to update unit: {e}", parent=self)
-            return
-        if data['unit_type'].lower() == 'dorm':
-            if current >= data['capacity']:
-                new_status = 'Full'
-            elif current > 0:
-                new_status = 'Occupied'
-            else:
-                new_status = 'Vacant'
-        else:
-            new_status = 'Occupied' if current > 0 else 'Vacant'
-        try:
-            self.unit_model.update_status(uid, new_status)
-        except Exception:
-            pass
-        self.load_units()
-        messagebox.showinfo("Saved", "Unit updated.", parent=self)
 
     def set_dorm_capacity(self):
         uid = self.get_selected_unit_id()
@@ -2415,7 +2245,6 @@ class MainApp(ctk.CTk):
         if (row["status"] or "").lower() == "paid":
             messagebox.showinfo("Status", "This payment is already marked as Paid.", parent=self)
             return
-        # keep existing amounts, change status to Paid
         self.payment_model.update(
             payment_id,
             row["rent"] or 0.0,
@@ -2484,9 +2313,20 @@ class MainApp(ctk.CTk):
             updated = self.payment_model.get(payment_id)
             if updated and (updated["status"] or "").lower() == "paid":
                 try:
-                    ReceiptDialog(self, updated)
+                    dlg = ReceiptDialog(self, updated)
+                    try:
+                        self.wait_window(dlg)
+                    except Exception:
+                        pass
                 except Exception as e:
-                    pass
+                    import traceback, sys
+                    traceback.print_exc(file=sys.stderr)
+                    try:
+                        from tkinter import messagebox
+
+                        messagebox.showerror("Receipt Error", f"Failed to open receipt: {e}", parent=self)
+                    except Exception:
+                        print("Failed to show receipt and error dialog:", e, file=sys.stderr)
 
     def generate_auto_bills(self):
         today = datetime.date.today()
@@ -2503,20 +2343,35 @@ class MainApp(ctk.CTk):
 
             rent = t["room_price"] or 0.0
             ut = (t["tenant_type"] or "").strip().lower()
+            unit_id = t.get("unit_id")
+            
             if ut == "solo":
                 elec, water = SOLO_ELEC, SOLO_WATER
             elif ut == "family":
                 elec, water = FAMILY_ELEC, FAMILY_WATER
             elif ut == "dorm":
-                elec, water = DORM_ELEC, DORM_WATER
+                # For dorm: split utilities equally among all roommates in the unit
+                if unit_id:
+                    roommates = self.tenant_model.tenants_in_unit(unit_id)
+                    roommate_count = len(roommates) if roommates else 1
+                    elec = (DORM_ELEC / roommate_count) if roommate_count > 0 else DORM_ELEC
+                    water = (DORM_WATER / roommate_count) if roommate_count > 0 else DORM_WATER
+                else:
+                    elec, water = DORM_ELEC, DORM_WATER
             else:
                 elec = water = 0.0
 
-            self.payment_model.create_due(tenant_id, rent, elec, water, note=note)
+            if ut == "dorm" and unit_id:
+                roommates = self.tenant_model.tenants_in_unit(unit_id)
+                split_note = f"{note} (split {len(roommates)} roommates)"
+            else:
+                split_note = note
+
+            self.payment_model.create_due(tenant_id, rent, elec, water, note=split_note)
             created_count += 1
 
         self.load_payments()
-        messagebox.showinfo("Auto-Billing", f"Generated {created_count} new invoice(s).", parent=self)
+        messagebox.showinfo("Auto-Billing", f"Generated {created_count} new invoice(s).\nDorm utilities split equally among roommates.", parent=self)
 
     def export_payments_csv(self):
         rows = self.payment_model.all()
@@ -2673,14 +2528,18 @@ class MainApp(ctk.CTk):
         filter_box = ctk.CTkFrame(frame, corner_radius=8, border_width=1, border_color="#2f6fff", fg_color="#061428")
         filter_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(6,12))
 
-        ctk.CTkButton(filter_box, text="New Request", width=120, command=self.new_maintenance).pack(side="left", padx=12, pady=12)
+        action_frame = ctk.CTkFrame(filter_box, fg_color="transparent")
+        action_frame.pack(side="left", padx=12, pady=12)
+        ctk.CTkButton(action_frame, text="New Request", width=120, command=self.new_maintenance).pack(side="left", padx=4)
+        ctk.CTkButton(action_frame, text="Mark In Progress", width=140, command=self.mark_maintenance_in_progress).pack(side="left", padx=4)
+        ctk.CTkButton(action_frame, text="Mark Completed", width=140, command=self.mark_maintenance_completed).pack(side="left", padx=4)
 
         table_box = ctk.CTkFrame(frame, corner_radius=8, border_width=1, border_color="#2f6fff", fg_color="#061428")
         table_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=0)
         table_box.grid_rowconfigure(0, weight=1)
         table_box.grid_columnconfigure(0, weight=1)
 
-        cols = ("request_id", "tenant_id", "tenant_name", "description", "priority", "date_requested", "status", "fee", "staff")
+        cols = ("request_id", "tenant_id", "tenant_name", "description", "priority", "date_requested", "date_completed", "status", "fee", "staff")
         self.maint_tree = ttk.Treeview(table_box, columns=cols, show="headings", style="WhiteBlueprint.Treeview")
         for c in cols:
             self.maint_tree.heading(c, text=c.replace("_", " ").title())
@@ -2709,6 +2568,7 @@ class MainApp(ctk.CTk):
                     m["description"] or "",
                     m["priority"] or "",
                     m["date_requested"] or "",
+                    m["date_completed"] or "",
                     m["status"] or "",
                     m["fee"] or 0.0,
                     m["staff"] or "",
@@ -2725,6 +2585,57 @@ class MainApp(ctk.CTk):
             )
             self.load_maintenance()
             messagebox.showinfo("Saved", "Maintenance request added.", parent=self)
+
+    def get_selected_maintenance_id(self):
+        if not hasattr(self, "maint_tree"):
+            return None
+        sel = self.maint_tree.selection()
+        if not sel:
+            return None
+        item = self.maint_tree.item(sel[0])
+        vals = item.get("values") or []
+        if not vals:
+            return None
+        try:
+            return int(vals[0])
+        except (TypeError, ValueError):
+            return None
+
+    def mark_maintenance_in_progress(self):
+        req_id = self.get_selected_maintenance_id()
+        if not req_id:
+            messagebox.showwarning("Select", "Please select a maintenance request.", parent=self)
+            return
+        m = self.maintenance_model.get(req_id)
+        if not m:
+            messagebox.showwarning("Not Found", "Maintenance request not found.", parent=self)
+            return
+        if (m.get("status") or "").lower() == "completed":
+            messagebox.showinfo("Status", "This request is already completed.", parent=self)
+            return
+        self.maintenance_model.update_status(req_id, "In Progress")
+        self.load_maintenance()
+        self.log_action("Maintenance In Progress", f"request_id={req_id}")
+        messagebox.showinfo("Updated", "Maintenance marked as In Progress.", parent=self)
+
+    def mark_maintenance_completed(self):
+        req_id = self.get_selected_maintenance_id()
+        if not req_id:
+            messagebox.showwarning("Select", "Please select a maintenance request.", parent=self)
+            return
+        m = self.maintenance_model.get(req_id)
+        if not m:
+            messagebox.showwarning("Not Found", "Maintenance request not found.", parent=self)
+            return
+        if (m.get("status") or "").lower() == "completed":
+            messagebox.showinfo("Status", "This request is already completed.", parent=self)
+            return
+        self.maintenance_model.update_status(req_id, "Completed")
+        self.db.execute("UPDATE maintenance SET date_completed=? WHERE request_id=?", 
+                       (datetime.date.today().isoformat(), req_id))
+        self.load_maintenance()
+        self.log_action("Maintenance Completed", f"request_id={req_id}")
+        messagebox.showinfo("Completed", "Maintenance request marked as completed.", parent=self)
 
     def show_staff(self):
         self.current_view = "staff"
@@ -2984,7 +2895,6 @@ class MainApp(ctk.CTk):
         self.load_recycle()
         messagebox.showinfo("Restored", "Tenant restored to Active status.", parent=self)
 
-
     def show_reports(self):
         self.current_view = "reports"
         self.clear_body("Reports")
@@ -3089,14 +2999,14 @@ class MainApp(ctk.CTk):
         month = self.rep_month_var.get() if hasattr(self, "rep_month_var") else datetime.date.today().month
 
         income = self.payment_model.total_for_month(year, month)
-        maint_cost = self.maintenance_model.total_fee_for_month(year, month)
+        maint_cost = self.maintenance_model.total_for_month(year, month)
         net_income = income - maint_cost
 
         ytd_income = 0.0
         ytd_expenses = 0.0
         for m in range(1, month + 1):
             ytd_income += self.payment_model.total_for_month(year, m)
-            ytd_expenses += self.maintenance_model.total_fee_for_month(year, m)
+            ytd_expenses += self.maintenance_model.total_for_month(year, m)
         ytd_net = ytd_income - ytd_expenses
 
         total_units = len(self.unit_model.all())
@@ -3248,57 +3158,48 @@ class MainApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Restore Error", f"Failed to restore database:\n{e}", parent=self)
 
-    def show_policy(self):
-        PolicyDialog(self)
-
     def change_password(self):
         dlg = ChangePasswordDialog(self, self.db)
         self.wait_window(dlg)
-
-    def show_settings(self):
-        txt = (
-            "Settings:\n\n"
-            "- UI Theme: Toggle using 'Toggle Theme' button.\n"
-            "- Other settings can be added here."
-        )
-        messagebox.showinfo("Settings", txt, parent=self)
         
-def main():
-    db = Database()
+class Application:
+    def __init__(self):
+        self.db = Database()
 
-    root = ctk.CTk()
-    root.withdraw() 
-    policy = PolicyDialog(root)
-    root.wait_window(policy)
-    if not policy.accepted:
-        root.destroy()
-        db.close()
-        return
+    def run(self):
+        root = ctk.CTk()
+        root.withdraw()
+        policy = PolicyDialog(root)
+        root.wait_window(policy)
+        if not policy.accepted:
+            root.destroy()
+            self.db.close()
+            return
 
-    login = LoginDialog(root, db)
-    root.wait_window(login)
-    if not login.success:
-        root.destroy()
-        db.close()
-        return
-
-    root.destroy()
-
-    while True:
-        app = MainApp(db)
-        app.mainloop()
-        if not app.logout_requested:
-            break
-        new_root = ctk.CTk()
-        new_root.withdraw()
-        login = LoginDialog(new_root, db)
-        new_root.wait_window(login)
+        login = LoginDialog(root, self.db)
+        root.wait_window(login)
         if not login.success:
-            new_root.destroy()
-            break
-        new_root.destroy()
+            root.destroy()
+            self.db.close()
+            return
 
-    db.close()
+        root.destroy()
+
+        while True:
+            app = MainApp(self.db)
+            app.mainloop()
+            if not app.logout_requested:
+                break
+            new_root = ctk.CTk()
+            new_root.withdraw()
+            login = LoginDialog(new_root, self.db)
+            new_root.wait_window(login)
+            if not login.success:
+                new_root.destroy()
+                break
+            new_root.destroy()
+
+        self.db.close()
 
 if __name__ == "__main__":
-    main()
+    Application().run()
