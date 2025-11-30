@@ -1,31 +1,6 @@
 import os
 import sqlite3
-import datetime
-import customtkinter as ctk
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
-
-DB_FILE = "apartment_pro.db"
-DORM_DEFAULT_CAPACITY = 6
-NOTICE_PERIOD_DAYS = 30 
-
-SOLO_ELEC = 1500.0
-SOLO_WATER = 150.0
-FAMILY_ELEC = 2500.0
-FAMILY_WATER = 300.0
-DORM_ELEC = 150.0
-DORM_WATER = 80.0
-
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("blue")
-
-def ensure_column(conn, table, column, col_def):
-    cur = conn.cursor()
-    cur.execute(f"PRAGMA table_info({table})")
-    cols = [r[1] for r in cur.fetchall()]
-    if column not in cols:
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
-        conn.commit()
+from constants import DB_FILE, DORM_DEFAULT_CAPACITY
 
 
 class Database:
@@ -35,6 +10,14 @@ class Database:
         self.conn = sqlite3.connect(db_file, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.setup(first_time)
+
+    def _ensure_column(self, table, column, col_def):
+        cur = self.conn.cursor()
+        cur.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if column not in cols:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+            self.conn.commit()
 
     def setup(self, first_time=False):
         c = self.conn.cursor()
@@ -104,6 +87,8 @@ class Database:
             status TEXT,
             fee REAL DEFAULT 0,
             staff TEXT,
+            date_completed DATE,
+            deleted INTEGER DEFAULT 0,
             FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id)
         );
         """)
@@ -129,18 +114,20 @@ class Database:
 
         self.conn.commit()
 
-        ensure_column(self.conn, "units", "capacity", "INTEGER DEFAULT 1")
-        ensure_column(self.conn, "tenants", "guardian_name", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "guardian_contact", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "guardian_relation", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "emergency_contact", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "tenants", "advance_paid", "REAL DEFAULT 0")
-        ensure_column(self.conn, "tenants", "deposit_paid", "REAL DEFAULT 0")
-        ensure_column(self.conn, "tenants", "move_out_reason", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "payments", "note", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "maintenance", "fee", "REAL DEFAULT 0")
-        ensure_column(self.conn, "maintenance", "staff", "TEXT DEFAULT ''")
-        ensure_column(self.conn, "staff", "status", "TEXT DEFAULT 'Active'")
+        self._ensure_column("units", "capacity", "INTEGER DEFAULT 1")
+        self._ensure_column("tenants", "guardian_name", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "guardian_contact", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "guardian_relation", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "emergency_contact", "TEXT DEFAULT ''")
+        self._ensure_column("tenants", "advance_paid", "REAL DEFAULT 0")
+        self._ensure_column("tenants", "deposit_paid", "REAL DEFAULT 0")
+        self._ensure_column("tenants", "move_out_reason", "TEXT DEFAULT ''")
+        self._ensure_column("payments", "note", "TEXT DEFAULT ''")
+        self._ensure_column("maintenance", "fee", "REAL DEFAULT 0")
+        self._ensure_column("maintenance", "staff", "TEXT DEFAULT ''")
+        self._ensure_column("maintenance", "date_completed", "DATE DEFAULT NULL")
+        self._ensure_column("maintenance", "deleted", "INTEGER DEFAULT 0")
+        self._ensure_column("staff", "status", "TEXT DEFAULT 'Active'")
 
         self.seed_defaults()
 
